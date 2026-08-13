@@ -1,6 +1,6 @@
 -- =================================================================
 -- INDO KOS - FULL AUTO FARM & PLAYER UTILITY GUI (1 SCRIPT STANDALONE)
--- VERSI PREMIUM GUI: WIDER SHAPE (LEBAR), MINIMIZE (-), CLOSE (X), & TOGGLE BUTTON
+-- VERSI STRICT GARBAGE ISOLATION: GARBAGE TAKE & DISCARD KHUSUS AREA BOS
 -- =================================================================
 
 local Players = game:GetService("Players")
@@ -65,6 +65,16 @@ local function isBlacklisted(prompt)
 	return false
 end
 
+local function isModelBlacklisted(model)
+	if not model then return true end
+	local current = model
+	while current and current ~= Workspace do
+		if BlacklistedModels[current] then return true end
+		current = current.Parent
+	end
+	return false
+end
+
 local function blacklistLastPrompt()
 	if LastAttemptedPrompt then
 		BlacklistedPrompts[LastAttemptedPrompt] = true
@@ -92,7 +102,7 @@ local function checkGameWarnings()
 end
 
 -- =================================================================
--- 2. DETEKTOR OTOMATIS STATUS PETUGAS KEBERSIHAN
+-- 2. DETEKTOR OTOMATIS STATUS PETUGAS KEBERSIHAN & MODEL AREA BOS
 -- =================================================================
 
 local function isPlayerEmployee()
@@ -140,17 +150,67 @@ local function isPlayerEmployee()
 	return isEmployee
 end
 
+-- Mendapatkan Model Area Kerja Bos Aktif (Strict Boss Model)
+local function getBossAreaModel()
+	local character = LocalPlayer.Character
+	local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+	local closestDist = math.huge
+	local bossModel = nil
+
+	-- 1. Cari Billboard TextLabel "KOTOR" atau "DIRTY"
+	for _, desc in ipairs(Workspace:GetDescendants()) do
+		if desc:IsA("TextLabel") and desc.Visible then
+			local txt = string.upper(desc.Text or "")
+			if string.find(txt, "KOTOR") or string.find(txt, "DIRTY") then
+				local modelAncestor = desc:FindFirstAncestorWhichIsA("Model") or desc:FindFirstAncestorWhichIsA("Folder")
+				if modelAncestor and not isModelBlacklisted(modelAncestor) and rootPart then
+					local pos = modelAncestor:GetPivot().Position
+					local dist = (rootPart.Position - pos).Magnitude
+					if dist < closestDist then
+						closestDist = dist
+						bossModel = modelAncestor
+					end
+				end
+			end
+		end
+	end
+
+	-- 2. Jika tidak ada billboard, cari dari Dirt Clean prompt terdekat yang valid
+	if not bossModel then
+		for _, prompt in ipairs(Workspace:GetDescendants()) do
+			if prompt:IsA("ProximityPrompt") and prompt.Enabled and not isBlacklisted(prompt) then
+				local action = string.lower(prompt.ActionText or "")
+				local objText = string.lower(prompt.ObjectText or "")
+				if string.find(objText, "dirt") or string.find(action, "clean") or string.find(objText, "kotor") then
+					local modelAncestor = prompt:FindFirstAncestorWhichIsA("Model") or prompt:FindFirstAncestorWhichIsA("Folder")
+					if modelAncestor and not isModelBlacklisted(modelAncestor) and rootPart then
+						local pos = modelAncestor:GetPivot().Position
+						local dist = (rootPart.Position - pos).Magnitude
+						if dist < closestDist then
+							closestDist = dist
+							bossModel = modelAncestor
+						end
+					end
+				end
+			end
+		end
+	end
+
+	return bossModel
+end
+
 -- =================================================================
--- 3. DETEKTOR PROMPT VALID DI ZONA BOS (NON-BLACKLISTED)
+-- 3. DETEKTOR PROMPT STRICT BOSS ZONE (DIRT, GARBAGE TAKE & DISCARD)
 -- =================================================================
 
 -- 1. Deteksi "Dirt Clean" di Zona Bos
-local function getValidDirtCleanPrompts()
+local function getValidDirtCleanPrompts(bossModel)
 	local prompts = {}
+	local searchScope = bossModel or Workspace
 	local character = LocalPlayer.Character
 	local rootPart = character and character:FindFirstChild("HumanoidRootPart")
 
-	for _, descendant in ipairs(Workspace:GetDescendants()) do
+	for _, descendant in ipairs(searchScope:GetDescendants()) do
 		if descendant:IsA("ProximityPrompt") and descendant.Enabled and not isBlacklisted(descendant) then
 			local action = string.lower(descendant.ActionText or "")
 			local objText = string.lower(descendant.ObjectText or "")
@@ -171,13 +231,14 @@ local function getValidDirtCleanPrompts()
 	return prompts
 end
 
--- 2. Deteksi "Garbage Take" di Zona Bos
-local function getValidGarbageTakePrompts()
+-- 2. Deteksi "Garbage Take" KHUSUS HANYA DI DALAM AREA BOS (Strict Isolation)
+local function getValidGarbageTakePrompts(bossModel)
 	local prompts = {}
+	local searchScope = bossModel or Workspace
 	local character = LocalPlayer.Character
 	local rootPart = character and character:FindFirstChild("HumanoidRootPart")
 
-	for _, descendant in ipairs(Workspace:GetDescendants()) do
+	for _, descendant in ipairs(searchScope:GetDescendants()) do
 		if descendant:IsA("ProximityPrompt") and descendant.Enabled and not isBlacklisted(descendant) then
 			local action = string.lower(descendant.ActionText or "")
 			local objText = string.lower(descendant.ObjectText or "")
@@ -187,11 +248,11 @@ local function getValidGarbageTakePrompts()
 			local isGarbageTake = false
 			if (string.find(action, "take") and string.find(objText, "garbage"))
 				or (string.find(objText, "garbage") and not string.find(objText, "bin"))
-				or string.find(action, "take")
+				or (string.find(action, "take") and string.find(objText, "sampah"))
 				or string.find(name, "garbage") or string.find(name, "trash") or string.find(name, "sampah")
 				or string.find(parentName, "garbage") or string.find(parentName, "trash") or string.find(parentName, "sampah") then
 				
-				if not string.find(objText, "bin") and not string.find(action, "discard") then
+				if not string.find(objText, "bin") and not string.find(action, "discard") and not string.find(name, "bin") then
 					isGarbageTake = true
 				end
 			end
@@ -213,16 +274,33 @@ local function getValidGarbageTakePrompts()
 	return prompts
 end
 
--- 3. Deteksi Tempat Sampah "Garbage Bin Discard"
-local function getValidGarbageBinPrompts()
+-- 3. Deteksi Tempat Sampah "Garbage Bin Discard" (Prioritas Dalam Area Bos / Bak Terdekat Valid)
+local function getValidGarbageBinPrompts(bossModel)
 	local prompts = {}
 	local character = LocalPlayer.Character
 	local rootPart = character and character:FindFirstChild("HumanoidRootPart")
 	local closestDist = math.huge
 	local targetBin = nil
 
+	-- Prioritas 1: Tempat Sampah di dalam Area Bos
+	if bossModel then
+		for _, descendant in ipairs(bossModel:GetDescendants()) do
+			if descendant:IsA("ProximityPrompt") and descendant.Enabled and not isBlacklisted(descendant) then
+				local action = string.lower(descendant.ActionText or "")
+				local objText = string.lower(descendant.ObjectText or "")
+				local name = string.lower(descendant.Name or "")
+
+				if string.find(action, "discard") or string.find(objText, "garbage bin") or string.find(objText, "bin") or string.find(name, "bin") or string.find(name, "discard") then
+					table.insert(prompts, descendant)
+					return prompts
+				end
+			end
+		end
+	end
+
+	-- Prioritas 2: Bak Sampah terdekat di luar area bos yang TIDAK diblacklist
 	for _, descendant in ipairs(Workspace:GetDescendants()) do
-		if descendant:IsA("ProximityPrompt") and descendant.Enabled then
+		if descendant:IsA("ProximityPrompt") and descendant.Enabled and not isBlacklisted(descendant) then
 			local action = string.lower(descendant.ActionText or "")
 			local objText = string.lower(descendant.ObjectText or "")
 			local name = string.lower(descendant.Name or "")
@@ -345,7 +423,7 @@ RunService.RenderStepped:Connect(function()
 end)
 
 -- =================================================================
--- 5. AUTO CLEAN ENGINE (CONTINUOUS EXECUTION UNTIL 100% COMPLETE)
+-- 5. AUTO CLEAN ENGINE (STRICT BOSS ZONE ISOLATION EXECUTION)
 -- =================================================================
 
 local function triggerPrompt(prompt)
@@ -383,12 +461,13 @@ task.spawn(function()
 				continue
 			end
 
+			local bossModel = getBossAreaModel()
 			local character = LocalPlayer.Character
 			if not character or not character:FindFirstChild("HumanoidRootPart") then continue end
 			local rootPart = character.HumanoidRootPart
 
-			-- 1. Bersihkan SELURUH "Dirt Clean" di Zona Bos
-			local dirtPrompts = getValidDirtCleanPrompts()
+			-- 1. Bersihkan SELURUH "Dirt Clean" di Area Bos
+			local dirtPrompts = getValidDirtCleanPrompts(bossModel)
 
 			if #dirtPrompts > 0 then
 				for _, prompt in ipairs(dirtPrompts) do
@@ -412,8 +491,8 @@ task.spawn(function()
 				end
 			end
 
-			-- 2. Ambil SELURUH "Garbage Take" di Zona Bos
-			local garbagePrompts = getValidGarbageTakePrompts()
+			-- 2. Ambil SELURUH "Garbage Take" KHUSUS DI AREA BOS
+			local garbagePrompts = getValidGarbageTakePrompts(bossModel)
 			local tookGarbage = false
 
 			if #garbagePrompts > 0 then
@@ -441,11 +520,11 @@ task.spawn(function()
 
 			-- 3. Membuang Sampah ke "Garbage Bin Discard"
 			if tookGarbage or #garbagePrompts > 0 then
-				local binPrompts = getValidGarbageBinPrompts()
+				local binPrompts = getValidGarbageBinPrompts(bossModel)
 				if #binPrompts > 0 then
 					for _, binPrompt in ipairs(binPrompts) do
 						if not Config.AutoClean then break end
-						if binPrompt and binPrompt.Parent and binPrompt.Enabled then
+						if binPrompt and binPrompt.Parent and binPrompt.Enabled and not isBlacklisted(binPrompt) then
 							local targetPart = binPrompt.Parent:IsA("BasePart") and binPrompt.Parent 
 								or (binPrompt.Parent:IsA("Model") and (binPrompt.Parent.PrimaryPart or binPrompt.Parent:FindFirstChildWhichIsA("BasePart")))
 
@@ -460,18 +539,18 @@ task.spawn(function()
 				end
 			end
 
-			-- 4. VERIFIKASI KETAT SEBELUM MATI
+			-- 4. VERIFIKASI KETAT SEBELUM MATI: Memastikan Dirt Clean & Garbage Take di Area Bos BENAR-BENAR 0
 			task.wait(1.5)
-			local checkDirt = getValidDirtCleanPrompts()
-			local checkGarbage = getValidGarbageTakePrompts()
+			local checkDirt = getValidDirtCleanPrompts(bossModel)
+			local checkGarbage = getValidGarbageTakePrompts(bossModel)
 
 			if #checkDirt > 0 or #checkGarbage > 0 then
 				continue
 			end
 
 			task.wait(1.0)
-			local recheckDirt = getValidDirtCleanPrompts()
-			local recheckGarbage = getValidGarbageTakePrompts()
+			local recheckDirt = getValidDirtCleanPrompts(bossModel)
+			local recheckGarbage = getValidGarbageTakePrompts(bossModel)
 
 			if #recheckDirt == 0 and #recheckGarbage == 0 then
 				Config.AutoClean = false
@@ -732,4 +811,4 @@ createSlider("Kecepatan Terbang (Fly)", 20, 200, Config.FlySpeed, function(v)
 	Config.FlySpeed = v
 end)
 
-notify("Indo Kos Script", "GUI Baru Dimuat! Ukuran Lebar, Minimize & Close Aktif.", 4)
+notify("Indo Kos Script", "Garbage Take & Discard Scoping Fixed!", 4)
